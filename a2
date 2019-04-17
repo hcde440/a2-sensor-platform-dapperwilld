@@ -1,0 +1,144 @@
+/*Assignment 2
+
+William Dodson
+HCDE 440
+4/16/19
+
+This program uses an Adafruit Si7021 sensor to read humidity data for the surrounding area and
+compares it to the value given from the open weather API and output them to Serial and an Arduino IO dashboard found here 
+
+//Arduino IO Dashboard URL: https://io.adafruit.com/wdodson/dashboards/a2
+
+The dashboard also controls an LED on the breadboard to signifiy whether the values match or not.
+
+*/
+
+/************************** Configuration ***********************************/
+
+// edit the config.h tab and enter your Adafruit IO credentials
+// and any additional configuration needed for WiFi, cellular,
+// or ethernet clients.
+#include "config.h"0
+
+#include <Adafruit_Sensor.h>     /////
+#include "Adafruit_Si7021.h"        //                           
+#include <SPI.h>                    //
+#include <Wire.h>                   //////  Initializes the Libraries used in the program   
+#include <ESP8266WiFi.h>            //
+#include <ESP8266HTTPClient.h>      //
+#include <ArduinoJson.h>         /////
+    
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+
+#define LED_PIN 14 // sets the LED pin to pin 14
+
+// set up the 'temperature', 'humidity', and digital feeds on Adafruit IO
+AdafruitIO_Feed *digital = io.feed("digital");
+AdafruitIO_Feed *humidity = io.feed("humidity");
+AdafruitIO_Feed *APIhumidity = io.feed("APIhumidity");
+
+String weatherKey = "2fec1143f43e5bc01d052646a2cb8e1c"; //API key for open weather API
+String city = "Seattle"; // city field for openweather API query
+
+typedef struct { // data structure (name: value pairs) that holds values for humidity
+  String hd;
+} MetData;
+
+MetData conditions; // creates Metdata structure named conditions
+
+Adafruit_Si7021 sensor = Adafruit_Si7021(); // initializes Si7021 sensor object
+
+void setup() {
+
+  // start the serial connection
+  Serial.begin(115200);
+    //Checks if sensor is conected to Arduino via I2C 
+    if (!sensor.begin()) {
+    Serial.println("Did not find Si7021 sensor!");
+    while (true)
+      ;
+  }
+ 
+  // connect to io.adafruit.com
+  Serial.print("Connecting to Adafruit IO");
+  io.connect();
+  
+  pinMode(LED_PIN, OUTPUT);//initializes the LED pin as a digital output 
+  // wait for a connection
+  while (io.status() < AIO_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  getHumidity(city);// calls getHumidity function that navigates openweather API
+
+  // we are connected
+  Serial.println();
+  Serial.println(io.statusText());
+
+    digital->onMessage(handleMessage);// tells Adafruit IO to send/recieve messages through the Digital feed
+                                      // also calls handleMessage function to handle responses 
+    digital->get(); // gets the first value for the digital feed
+
+}
+
+void loop() {
+
+  // io.run(); is required for all sketches.
+  // it should always be present at the top of your loop
+  // function. it keeps the client connected to
+  // io.adafruit.com, and processes any incoming data.
+  io.run();
+  
+  float humiditySi7021 = 0; // initializes float variable for sensor reading
+
+  Serial.print("sensor humidity: ");
+  humiditySi7021 = sensor.readHumidity(); // prints humidity readings to Serial
+  Serial.print(humiditySi7021);
+  Serial.print("%    ");
+  Serial.print("API humidity: ");
+  Serial.print(conditions.hd);
+  Serial.println("%");
+
+  // save humidity readings to Adafruit IO
+  humidity->save(humiditySi7021);
+  APIhumidity->save(conditions.hd);
+
+  // wait 3 second
+  delay(3000);
+
+}
+
+void getHumidity(String city) {
+  HTTPClient theClient; // initializes browser
+  String apiCall = "http://api.openweathermap.org/data/2.5/weather?q=" + city; //Assembles the URL for the 
+  apiCall += "&units=imperial&appid=";                                         //Openweathermap API request and stores
+  apiCall += weatherKey;                                                       //it in the apiCall variable
+  theClient.begin(apiCall);//navigates to weather data API
+  int httpCode = theClient.GET();//
+  if (httpCode > 0) {
+
+    if (httpCode == HTTP_CODE_OK) {//Checks whether the GET request was successful
+      String payload = theClient.getString();
+      DynamicJsonBuffer jsonBuffer;//initializs JSON parser
+      JsonObject& root = jsonBuffer.parseObject(payload);//Parses String payload as a JSON object stored in root variable
+      if (!root.success()) {//Checks whether parse was successful, prints error message to Serial
+        Serial.println("parseObject() failed in getMet().");
+        return;
+      }                 ///Populates the conditions MetData
+      conditions.hd = root["main"]["humidity"].as<String>(); 
+    }
+  }
+}
+
+void handleMessage(AdafruitIO_Data *data) {
+  Serial.print("received <- ");// prints that the message has been recieved
+  if(data->toPinLevel() == HIGH)// checks the incoming message for the pin level
+    Serial.println("HIGH");
+  else
+    Serial.println("LOW");
+
+  digitalWrite(LED_PIN, data->toPinLevel()); //writes the new value to the LED
+}
